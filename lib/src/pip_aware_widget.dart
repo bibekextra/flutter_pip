@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'flutter_pip.dart';
 
-class PipAwareWidget extends StatefulWidget {
+class PipAwareWidget extends StatelessWidget {
   PipAwareWidget({
     Key key,
     @required this.builder,
@@ -13,19 +13,14 @@ class PipAwareWidget extends StatefulWidget {
   final WidgetBuilder pipBuilder;
 
   @override
-  PipAwareWidgetState createState() => PipAwareWidgetState();
-}
-
-class PipAwareWidgetState extends State<PipAwareWidget> {
-  @override
   Widget build(BuildContext context) {
     return StreamBuilder<bool>(
       stream: FlutterPip.onPiPModeChanged,
       builder: (context, snapshot) {
         if (snapshot.hasData && snapshot.data) {
-          return widget.pipBuilder(context);
+          return pipBuilder(context);
         }
-        return widget.builder(context);
+        return builder(context);
       },
     );
   }
