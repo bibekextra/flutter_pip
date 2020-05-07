@@ -2,12 +2,18 @@ package com.grinder15.flutter_pip
 
 import android.app.PictureInPictureParams
 import android.os.Build
+import android.util.Log
 import android.util.Rational
 import androidx.annotation.NonNull
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.OnLifecycleEvent
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
+import io.flutter.embedding.engine.plugins.lifecycle.FlutterLifecycleAdapter
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -16,20 +22,27 @@ import io.flutter.plugin.common.PluginRegistry
 import io.flutter.plugin.common.PluginRegistry.Registrar
 
 /** FlutterPipPlugin */
-class FlutterPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, PluginRegistry.UserLeaveHintListener {
+class FlutterPipPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler,
+        ActivityAware, PluginRegistry.UserLeaveHintListener, LifecycleObserver {
+    private val TAG: String = "FlutterPipPlugin"
     /// The MethodChannel that will the communication between Flutter and native Android
     ///
     /// This local reference serves to register the plugin with the Flutter Engine and unregister it
     /// when the Flutter Engine is detached from the Activity
     private lateinit var channel: MethodChannel
+    private lateinit var eventChannel: EventChannel
     private var activityPluginBinding: ActivityPluginBinding? = null
+    private var eventSink: EventChannel.EventSink? = null
+    private var isInPipMode: Boolean? = null
     private var pipReady: Boolean = false
     private var numerator: Double? = null
     private var denominator: Double? = null
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-        channel = MethodChannel(flutterPluginBinding.flutterEngine.dartExecutor, FLUTTER_PIP)
+        channel = MethodChannel(flutterPluginBinding.binaryMessenger, FLUTTER_PIP)
         channel.setMethodCallHandler(this)
+        eventChannel = EventChannel(flutterPluginBinding.binaryMessenger, FLUTTER_PIP_EVENT)
+        eventChannel.setStreamHandler(this)
     }
 
     // This static function is optional and equivalent to onAttachedToEngine. It supports the old
@@ -43,6 +56,7 @@ class FlutterPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Plugin
     // in the same class.
     companion object {
         const val FLUTTER_PIP: String = "flutter_pip"
+        const val FLUTTER_PIP_EVENT: String = "flutter_pip_event"
         const val SET_PIP_READY: String = "setPiPReady"
         const val UNSET_PIP_READY: String = "unsetPiPReady"
         const val GET_PIP_READY: String = "getPiPReadyStatus"
@@ -50,8 +64,11 @@ class FlutterPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Plugin
 
         @JvmStatic
         fun registerWith(registrar: Registrar) {
+            val plugin = FlutterPipPlugin()
             val channel = MethodChannel(registrar.messenger(), FLUTTER_PIP)
-            channel.setMethodCallHandler(FlutterPipPlugin())
+            channel.setMethodCallHandler(plugin)
+            val eventChannel = EventChannel(registrar.messenger(), FLUTTER_PIP_EVENT)
+            eventChannel.setStreamHandler(plugin)
         }
     }
 
@@ -83,14 +100,22 @@ class FlutterPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Plugin
         }
     }
 
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+        Log.i(TAG, "onListen triggered")
+        checkActivityPictureInPictureMode()
+    }
+
+    override fun onCancel(arguments: Any?) {
+        eventSink = null
+    }
+
     private fun checkIfPiPSupported(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
     }
 
     private fun switchToPiPMode(numerator: Double?, denominator: Double?) {
         if (checkIfPiPSupported()) {
-            //val width = activityPluginBinding?.activity?.window?.decorView?.width
-            //val height = activityPluginBinding?.activity?.window?.decorView?.height
             if (denominator != null && numerator != null) {
                 val pipParams = PictureInPictureParams.Builder()
                         //.setAspectRatio(Rational(width + (width * 0.6).toInt(), height))
@@ -121,31 +146,75 @@ class FlutterPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Plugin
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        eventChannel.setStreamHandler(null)
     }
 
     override fun onDetachedFromActivity() {
-        activityPluginBinding?.removeOnUserLeaveHintListener(this)
-        activityPluginBinding = null
+        unSetActivityBinding()
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
-        activityPluginBinding = binding
-        activityPluginBinding?.addOnUserLeaveHintListener(this)
+        setActivityBinding(binding)
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        activityPluginBinding = binding
-        activityPluginBinding?.addOnUserLeaveHintListener(this)
+        setActivityBinding(binding)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
-        activityPluginBinding?.removeOnUserLeaveHintListener(this)
+        unSetActivityBinding()
+    }
+
+    private fun setActivityBinding(binding: ActivityPluginBinding) {
+        activityPluginBinding = binding
+        if (activityPluginBinding != null) {
+            FlutterLifecycleAdapter.getActivityLifecycle(activityPluginBinding!!).addObserver(this)
+            activityPluginBinding?.addOnUserLeaveHintListener(this)
+        }
+    }
+
+    private fun unSetActivityBinding() {
+        if (activityPluginBinding != null) {
+            FlutterLifecycleAdapter.getActivityLifecycle(activityPluginBinding!!).removeObserver(this)
+            activityPluginBinding?.removeOnUserLeaveHintListener(this)
+        }
         activityPluginBinding = null
     }
 
     override fun onUserLeaveHint() {
         if (getPiPReady()) {
             switchToPiPMode(numerator, denominator)
+        }
+    }
+
+    @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
+    private fun onActivityResume() {
+        checkActivityPictureInPictureMode()
+    }
+
+    @OnLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+    private fun onActivityPause() {
+        checkActivityPictureInPictureMode()
+    }
+
+    private fun checkActivityPictureInPictureMode() {
+        if (eventSink != null) {
+            if (activityPluginBinding != null) {
+                if (checkIfPiPSupported()) {
+                    val isPiPMode = activityPluginBinding?.activity?.isInPictureInPictureMode
+                    // TODO: isPipChangeEvent always triggered because we hook it up in onResume and onPause
+                    // later I wish there is a way to override activity callbacks especially "onPictureInPictureModeChanged()"
+                    // callback to prevent sending redundant events.
+                    if (this.isInPipMode != isPiPMode) {
+                        eventSink?.success(isPiPMode)
+                    }
+                } else {
+                    eventSink?.error(
+                            "NOT_SUPPORTED",
+                            "PiP Mode in SDK ${Build.VERSION.SDK_INT} is not supported.",
+                            null)
+                }
+            }
         }
     }
 }
