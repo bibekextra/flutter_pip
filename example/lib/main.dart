@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:after_layout/after_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pip/flutter_pip.dart';
@@ -23,20 +21,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with AfterLayoutMixin {
-  StreamSubscription _subscription;
-
-  @override
-  void initState() {
-    super.initState();
-    _subscription = FlutterPip.onPiPModeChanged.listen((bool isInPiPMode) {
-      if (isInPiPMode) {
-        print('In Pip Mode');
-      } else {
-        print('Not In Pip Mode');
-      }
-    });
-  }
-
   @override
   void afterFirstLayout(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -48,28 +32,29 @@ class _HomePageState extends State<HomePage> with AfterLayoutMixin {
     final size = MediaQuery.of(context).size;
     print('Width: ${size.width}');
     print('Height: ${size.height}');
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Flutter PiP Example'),
-        actions: <Widget>[
-          IconButton(
-            icon: Icon(Icons.picture_in_picture_alt),
-            onPressed: () {
-              FlutterPip.switchToPiPMode();
-            },
-          )
-        ],
+    return PipAwareWidget(
+      builder: (context) => Scaffold(
+        appBar: AppBar(
+          title: const Text('Flutter PiP Example'),
+          actions: <Widget>[
+            IconButton(
+              icon: Icon(Icons.picture_in_picture_alt),
+              onPressed: () {
+                FlutterPip.switchToPiPMode();
+              },
+            )
+          ],
+        ),
+        body: Center(
+          child: Text(
+              'Press Home button or Action Button to Proceed to PiP Mode.'),
+        ),
       ),
-      body: Center(
-        child: Text('Press Home button to Proceed to PiP Mode.'),
+      pipBuilder: (context) => Scaffold(
+        body: Center(
+          child: Text('Pip Mode'),
+        ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _subscription?.cancel();
-    FlutterPip.unsetPipReady();
-    super.dispose();
   }
 }
